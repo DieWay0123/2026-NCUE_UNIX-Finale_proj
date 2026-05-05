@@ -69,27 +69,40 @@
 
 ```text
 .
-├── README.md
-├── Makefile
-├── src/
-│   ├── main.c
-│   ├── core.c
-│   └── utils.c
-├── include/
-│   ├── core.h
-│   └── utils.h
+busybox-diag-toolkit/
+├── busybox/
+│   └── BusyBox source tree or submodule
+├── libdiag/
+│   ├── diag_common.h
+│   ├── proc_reader.c
+│   ├── fs_reader.c
+│   ├── net_reader.c
+│   ├── formatter.c
+│   └── rule_checker.c
+├── applets/
+│   ├── bbtop.c
+│   ├── bbfscheck.c
+│   └── bbnetmon.c
 ├── tests/
-│   ├── test_basic.sh
-│   └── test_edge_cases.sh
+│   ├── test_bbtop.sh
+│   ├── test_bbfscheck.sh
+│   ├── test_bbnetmon.sh
+│   └── generate_testdata.sh
 ├── benchmark/
-│   ├── benchmark.sh
+│   ├── bench_bbtop.sh
+│   ├── bench_bbfscheck.sh
+│   ├── bench_bbnetmon.sh
 │   └── results/
 ├── docs/
-│   ├── design.md
-│   ├── report.md
-│   └── demo.md
-└── data/
-    └── sample_input.txt
+│   ├── man/
+│   │   ├── bbtop.1
+│   │   ├── bbfscheck.1
+│   │   └── bbnetmon.1
+│   ├── demo.md
+│   └── benchmark.md
+├── README.md
+├── CONTRIBUTING.md
+└── AGENTS.md
 ```
 
 ### 目錄說明
