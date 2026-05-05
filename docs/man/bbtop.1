@@ -1,0 +1,16 @@
+.TH BBTOP 1
+.SH NAME
+bbtop \- lightweight process resource analyzer
+.SH SYNOPSIS
+.B bbtop
+[\-\-snapshot] [\-\-sort cpu|mem|pid] [\-\-tree] [\-\-interval SEC] [\-\-limit N]
+.SH DESCRIPTION
+bbtop reads process information from procfs and reports process resource usage.
+.SH OPTIONS
+.TP
+.B \-\-help
+Show help text.
+.SH EXAMPLES
+.B bbtop \-\-snapshot \-\-sort cpu
+.SH EXIT STATUS
+0 on success, non-zero on error.
