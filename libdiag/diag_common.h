@@ -6,6 +6,7 @@
 #define DIAG_COMM_LEN 256
 #define DIAG_ADDR_LEN 64
 #define DIAG_STATE_LEN 32
+#define DIAG_PATH_LEN 256
 
 typedef struct {
     int pid;
@@ -16,6 +17,8 @@ typedef struct {
 } diag_proc_info;
 
 typedef struct {
+    char filesystem[DIAG_PATH_LEN];
+    char mount_point[DIAG_PATH_LEN];
     unsigned long total_blocks;
     unsigned long used_blocks;
     unsigned long free_blocks;

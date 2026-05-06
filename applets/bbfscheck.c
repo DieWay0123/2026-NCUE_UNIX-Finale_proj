@@ -65,15 +65,18 @@ static int print_summary(const char *path)
         return BBFSCHECK_EXIT_READ_FAILURE;
     }
 
-    puts("PATH TOTAL_KB USED_KB FREE_KB USE% STATUS");
-    printf("%s %lu %lu %lu %.1f %s\n",
-           path,
+    printf("%-20s %12s %12s %12s %5s %-8s %s\n",
+           "Filesystem", "1K-blocks", "Used", "Available", "Use%", "Status",
+           "Mounted on");
+    printf("%-20s %12lu %12lu %12lu %4.0f%% %-8s %s\n",
+           info.filesystem,
            blocks_to_kb(&info, info.total_blocks),
            blocks_to_kb(&info, info.used_blocks),
            blocks_to_kb(&info, info.free_blocks),
            info.block_usage_percent,
            diag_health_status(WARNING_THRESHOLD, CRITICAL_THRESHOLD,
-                              info.block_usage_percent));
+                              info.block_usage_percent),
+           info.mount_point);
 
     return 0;
 }
@@ -87,15 +90,18 @@ static int print_inode(const char *path)
         return BBFSCHECK_EXIT_READ_FAILURE;
     }
 
-    puts("PATH TOTAL_INODES USED_INODES FREE_INODES USE% STATUS");
-    printf("%s %lu %lu %lu %.1f %s\n",
-           path,
+    printf("%-20s %12s %12s %12s %5s %-8s %s\n",
+           "Filesystem", "Inodes", "IUsed", "IFree", "IUse%", "Status",
+           "Mounted on");
+    printf("%-20s %12lu %12lu %12lu %4.0f%% %-8s %s\n",
+           info.filesystem,
            info.total_inodes,
            info.used_inodes,
            info.free_inodes,
            info.inode_usage_percent,
            diag_health_status(WARNING_THRESHOLD, CRITICAL_THRESHOLD,
-                              info.inode_usage_percent));
+                              info.inode_usage_percent),
+           info.mount_point);
 
     return 0;
 }
@@ -112,15 +118,17 @@ static int print_scan(const char *path, int max_depth, unsigned long small_file_
         return BBFSCHECK_EXIT_READ_FAILURE;
     }
 
-    puts("PATH FILES DIRS SYMLINKS OTHER SMALL_FILES TOTAL_BYTES ERRORS SKIPPED_SPECIAL STATUS");
-    printf("%s %lu %lu %lu %lu %lu %llu %lu %lu %s\n",
+    printf("%-20s %12s %8s %8s %8s %8s %12s %8s %8s %-8s\n",
+           "Path", "Bytes", "Files", "Dirs", "Links", "Other", "Small files",
+           "Errors", "Skipped", "Status");
+    printf("%-20s %12llu %8lu %8lu %8lu %8lu %12lu %8lu %8lu %-8s\n",
            path,
+           info.total_size,
            info.files,
            info.directories,
            info.symlinks,
            info.other,
            info.small_files,
-           info.total_size,
            info.errors,
            info.skipped_special,
            info.errors == 0 ? "OK" : "WARNING");
