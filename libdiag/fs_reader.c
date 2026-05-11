@@ -5,7 +5,8 @@
 #include <errno.h>
 #include <string.h>
 
-int diag_fs_get_info(const char *path, diag_fs_info *info){
+int diag_fs_get_info(const char *path, diag_fs_info *info)
+{
     (void)path;
 
     if (info != NULL) {
@@ -25,6 +26,30 @@ int diag_fs_scan_path(const char *path, int max_depth, unsigned long small_file_
 
     if (info != NULL) {
         memset(info, 0, sizeof(*info));
+    }
+
+    errno = ENOSYS;
+    return -1;
+}
+
+int diag_fs_get_mount_info(const char *path, diag_mount_info *info)
+{
+    (void)path;
+    if (info != NULL) {
+        memset(info, 0, sizeof(*info));
+    }
+
+    errno = ENOSYS;
+    return -1;
+}
+
+int diag_fs_read_mounts(diag_mount_info *mounts, size_t capacity, size_t *count)
+{
+    (void)mounts;
+    (void)capacity;
+
+    if (count != NULL) {
+        *count = 0;
     }
 
     errno = ENOSYS;
@@ -124,76 +149,246 @@ static int path_is_under_mount(const char *path, const char *mount_point)
            (path[mount_len] == '\0' || path[mount_len] == '/');
 }
 
-static void fill_mount_info(const char *path, diag_fs_info *info)
+static int option_list_has(const char *options, const char *wanted)
+{
+    size_t wanted_len;
+    const char *pos;
+
+    if (options == NULL || wanted == NULL) {
+        return 0;
+    }
+
+    wanted_len = strlen(wanted);
+    pos = options;
+
+    while (*pos != '\0') {
+        if (strncmp(pos, wanted, wanted_len) == 0 &&
+            (pos[wanted_len] == '\0' || pos[wanted_len] == ',')) {
+            return 1;
+        }
+
+        pos = strchr(pos, ',');
+        if (pos == NULL) {
+            break;
+        }
+        pos++;
+    }
+
+    return 0;
+}
+
+static int parse_mountinfo_line(char *line, diag_mount_info *info)
+{
+    char *saveptr;
+    char *token;
+    char *mount_id;
+    char *parent_id;
+    char *root;
+    char *mount_point;
+    char *options;
+    char *fs_type;
+    char *source;
+    char *super_options;
+    size_t field;
+
+    memset(info, 0, sizeof(*info));
+
+    mount_id = NULL;
+    parent_id = NULL;
+    root = NULL;
+    mount_point = NULL;
+    options = NULL;
+    fs_type = NULL;
+    source = NULL;
+    super_options = NULL;
+
+    field = 0;
+    token = strtok_r(line, " \n", &saveptr);
+    while(token != NULL) {
+        if (strcmp(token, "-") == 0) {
+            fs_type = strtok_r(NULL, " \n", &saveptr);
+            source = strtok_r(NULL, " \n", &saveptr);
+            super_options = strtok_r(NULL, " \n", &saveptr);
+            break;
+        }
+
+        if (field == 0) {
+            mount_id = token;
+        } else if (field == 1) {
+            parent_id = token;
+        } else if (field == 3) {
+            root = token;
+        } else if (field == 4) {
+            mount_point = token;
+        } else if (field == 5) {
+            options = token;
+        }
+
+        field++;
+        token = strtok_r(NULL, " \n", &saveptr);
+    }
+
+    if (mount_id == NULL || parent_id == NULL || root == NULL ||
+        mount_point == NULL || options == NULL || fs_type == NULL) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    if (source == NULL) {
+        source = "none";
+    }
+    if (super_options == NULL) {
+        super_options = "";
+    }
+
+    decode_mountinfo_field(root);
+    decode_mountinfo_field(mount_point);
+    decode_mountinfo_field(source);
+
+    info->mount_id = atoi(mount_id);
+    info->parent_id = atoi(parent_id);
+    copy_string(info->root, sizeof(info->root), root);
+    copy_string(info->mount_point, sizeof(info->mount_point), mount_point);
+    copy_string(info->options, sizeof(info->options), options);
+    copy_string(info->fs_type, sizeof(info->fs_type), fs_type);
+    copy_string(info->source, sizeof(info->source), source);
+    copy_string(info->super_options, sizeof(info->super_options), super_options);
+    info->read_only = option_list_has(options, "ro");
+
+    return 0;
+}
+
+static int resolve_path_for_mount(const char *path, char *buffer, size_t buffer_size)
+{
+    char cwd[PATH_MAX];
+
+    if (realpath(path, buffer) != NULL) {
+        return 0;
+    }
+
+    if (path[0] == '/') {
+        copy_string(buffer, buffer_size, path);
+        return 0;
+    }
+
+    if (getcwd(cwd, sizeof(cwd)) == NULL) {
+        return -1;
+    }
+
+    if (snprintf(buffer, buffer_size, "%s/%s", cwd, path) >= (int)buffer_size) {
+        errno = ENAMETOOLONG;
+        return -1;
+    }
+
+    return 0;
+}
+
+int diag_fs_get_mount_info(const char *path, diag_mount_info *info)
 {
     FILE *fp;
     char resolved_path[PATH_MAX];
-    char line[1024];
+    char line[8192];
     size_t best_len;
+    int found;
 
-    if (realpath(path, resolved_path) == NULL) {
-        copy_string(resolved_path, sizeof(resolved_path), path);
+    if (path == NULL || info == NULL) {
+        errno = EINVAL;
+        return -1;
     }
 
-    copy_string(info->filesystem, sizeof(info->filesystem), path);
-    copy_string(info->mount_point, sizeof(info->mount_point), path);
+    if (resolve_path_for_mount(path, resolved_path, sizeof(resolved_path)) != 0) {
+        return -1;
+    }
 
     fp = fopen("/proc/self/mountinfo", "r");
     if (fp == NULL) {
-        return;
+        return -1;
     }
 
+    memset(info, 0, sizeof(*info));
     best_len = 0;
+    found = 0;
+
     while (fgets(line, sizeof(line), fp) != NULL) {
-        char *mount_point;
-        char *saveptr;
-        char *token;
-        char *mount_source;
-        size_t count;
+        diag_mount_info current;
         size_t mount_len;
 
-        count = 0;
-        mount_point = NULL;
-        mount_source = NULL;
-        token = strtok_r(line, " \n", &saveptr);
-
-        while (token != NULL) {
-            if (count == 4) {
-                mount_point = token;
-            }
-
-            if (strcmp(token, "-") == 0) {
-                (void)strtok_r(NULL, " \n", &saveptr);
-                mount_source = strtok_r(NULL, " \n", &saveptr);
-                break;
-            }
-
-            count++;
-            token = strtok_r(NULL, " \n", &saveptr);
-        }
-
-        if (mount_point == NULL || mount_source == NULL) {
+        if (parse_mountinfo_line(line, &current) != 0) {
             continue;
         }
 
-        decode_mountinfo_field(mount_point);
-        decode_mountinfo_field(mount_source);
-
-        if (!path_is_under_mount(resolved_path, mount_point)) {
+        if (!path_is_under_mount(resolved_path, current.mount_point)) {
             continue;
         }
 
-        mount_len = strlen(mount_point);
+        mount_len = strlen(current.mount_point);
         if (mount_len < best_len) {
             continue;
         }
 
         best_len = mount_len;
-        copy_string(info->filesystem, sizeof(info->filesystem), mount_source);
-        copy_string(info->mount_point, sizeof(info->mount_point), mount_point);
+        *info = current;
+        found = 1;
     }
 
     fclose(fp);
+
+    if (!found) {
+        errno = ENOENT;
+        return -1;
+    }
+
+    return 0;
+}
+
+int diag_fs_read_mounts(diag_mount_info *mounts, size_t capacity, size_t *count)
+{
+    FILE *fp;
+    char line[8192];
+    size_t used;
+
+    if (mounts == NULL || count == NULL || capacity == 0) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    fp = fopen("/proc/self/mountinfo", "r");
+    if (fp == NULL) {
+        return -1;
+    }
+
+    used = 0;
+    while (fgets(line, sizeof(line), fp) != NULL) {
+        diag_mount_info current;
+
+        if (parse_mountinfo_line(line, &current) != 0) {
+            continue;
+        }
+
+        if (used >= capacity) {
+            fclose(fp);
+            *count = used;
+            errno = ENOSPC;
+            return -1;
+        }
+
+        mounts[used++] = current;
+    }
+
+    fclose(fp);
+    *count = used;
+    return 0;
+}
+
+static void fill_mount_info(const char *path, diag_fs_info *info)
+{
+    diag_mount_info mount_info;
+    if(diag_fs_get_mount_info(path, &mount_info) != 0) {
+        return;
+    }
+
+    copy_string(info->filesystem, sizeof(info->filesystem), mount_info.source);
+    copy_string(info->mount_point, sizeof(info->mount_point), mount_info.mount_point);
 }
 
 int diag_fs_get_info(const char *path, diag_fs_info *info)

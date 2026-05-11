@@ -17,6 +17,8 @@
 #define CRITICAL_THRESHOLD 90.0
 #define SMALL_FILE_RATIO_WARNING 70.0
 #define SMALL_FILE_RATIO_CRITICAL 90.0
+#define BBFSCHECK_MAX_MOUNTS 1024
+
 
 typedef enum {
     DISPLAY_BLOCKS,
@@ -35,14 +37,18 @@ static void print_help(void)
     puts("       bbfscheck --inode PATH");
     puts("       bbfscheck --scan PATH [--max-depth N] [--small-file BYTES] [OPTIONS]");
     puts("       bbfscheck --check PATH [--max-depth N] [--small-file BYTES] [OPTIONS]");
+    puts("       bbfscheck --show-mount PATH");
+    puts("       bbfscheck --mount-tree");
     puts("");
-    puts("Filesystem health checking tool.");
+    puts("Filesystem health checking and mount inspection tool.");
     puts("");
-    puts("Options:");
+    puts("Modes:");
     puts("  --summary PATH          Show filesystem block usage");
     puts("  --inode PATH            Show filesystem inode usage");
     puts("  --scan PATH             Scan directory metadata");
     puts("  --check PATH            Show combined filesystem health report");
+    puts("  --show-mount PATH       Show mount information backing PATH");
+    puts("  --mount-tree            Show visible mounts as a tree");
     puts("");
     puts("Scan options:");
     puts("  --max-depth N           Limit scan recursion depth");
@@ -57,7 +63,6 @@ static void print_help(void)
     puts("Other options:");
     puts("  --help                  Show this help text");
 }
-
 
 static int parse_nonnegative_long(const char *value, long *result)
 {
@@ -283,13 +288,33 @@ static int max_int(int lhs, int rhs)
     return lhs > rhs ? lhs : rhs;
 }
 
+static void print_mount_hint(const diag_mount_info *info)
+{
+    if (strcmp(info->fs_type, "overlay") == 0) {
+        puts("Hint: overlay filesystem detected; writes may go to a container writable layer.");
+        return;
+    }
+
+    if (strcmp(info->fs_type, "tmpfs") == 0) {
+        puts("Hint: tmpfs detected; this path is memory-backed.");
+        return;
+    }
+
+    if (info->read_only) {
+        puts("Hint: this mount is read-only.");
+        return;
+    }
+
+    puts("Hint: writable filesystem.");
+}
+
 static int print_summary(const char *path, const display_options *display)
 {
     diag_fs_info info;
     char total[32];
     char used[32];
     char available[32];
-    char size_header[32];
+    char size_header[64];
 
     if (diag_fs_get_info(path, &info) != 0) {
         diag_print_error("bbfscheck", "failed to read filesystem summary", path);
@@ -390,7 +415,7 @@ static int print_check(const char *path, int max_depth, unsigned long small_file
     char used[32];
     char available[32];
     char scan_size[32];
-    char size_header[32];
+    char size_header[64];
 
     if (diag_fs_get_info(path, &fs_info) != 0) {
         diag_print_error("bbfscheck", "failed to read filesystem summary", path);
@@ -500,6 +525,121 @@ static int print_check(const char *path, int max_depth, unsigned long small_file
     return 0;
 }
 
+static int print_show_mount(const char *path)
+{
+    diag_mount_info info;
+
+    if (diag_fs_get_mount_info(path, &info) != 0) {
+        diag_print_error("bbfscheck", "failed to read mount information", path);
+        return BBFSCHECK_EXIT_READ_FAILURE;
+    }
+
+    printf("Path: %s\n", path);
+    printf("Mount point: %s\n", info.mount_point);
+    printf("Source: %s\n", info.source);
+    printf("Type: %s\n", info.fs_type);
+    printf("Mode: %s\n", info.read_only ? "ro" : "rw");
+    printf("Options: %s\n", info.options);
+    print_mount_hint(&info);
+
+    return 0;
+}
+
+static int mount_index_by_id(const diag_mount_info *mounts, size_t count, int mount_id)
+{
+    size_t i;
+
+    for (i = 0; i < count; i++) {
+        if (mounts[i].mount_id == mount_id) {
+            return (int)i;
+        }
+    }
+
+    return -1;
+}
+
+static void print_mount_tree_node(const diag_mount_info *mounts, size_t count,
+                                  int index, int depth, int *visited)
+{
+    size_t i;
+    int j;
+
+    if (index < 0 || (size_t)index >= count || visited[index]) {
+        return;
+    }
+
+    visited[index] = 1;
+
+    for (j = 0; j < depth; j++) {
+        printf("  ");
+    }
+
+    if (depth > 0) {
+        printf("|- ");
+    }
+
+    printf("%-40.40s %-20.20s %-10.10s %s\n",
+           mounts[index].mount_point,
+           mounts[index].source,
+           mounts[index].fs_type,
+           mounts[index].read_only ? "ro" : "rw");
+
+    for (i = 0; i < count; i++) {
+        if (mounts[i].parent_id == mounts[index].mount_id) {
+            print_mount_tree_node(mounts, count, (int)i, depth + 1, visited);
+        }
+    }
+}
+
+static int print_mount_tree(void)
+{
+    diag_mount_info *mounts;
+    int *visited;
+    size_t count;
+    size_t i;
+    int printed;
+
+    mounts = calloc(BBFSCHECK_MAX_MOUNTS, sizeof(*mounts));
+    visited = calloc(BBFSCHECK_MAX_MOUNTS, sizeof(*visited));
+    if (mounts == NULL || visited == NULL) {
+        free(mounts);
+        free(visited);
+        diag_print_error("bbfscheck", "failed to allocate mount tree buffers", NULL);
+        return BBFSCHECK_EXIT_READ_FAILURE;
+    }
+
+    if (diag_fs_read_mounts(mounts, BBFSCHECK_MAX_MOUNTS, &count) != 0) {
+        free(mounts);
+        free(visited);
+        diag_print_error("bbfscheck", "failed to read mount tree", "/proc/self/mountinfo");
+        return BBFSCHECK_EXIT_READ_FAILURE;
+    }
+
+    printf("%-43s %-20s %-10s %s\n", "Mount point", "Source", "Type", "Mode");
+    printed = 0;
+
+    for (i = 0; i < count; i++) {
+        if (mount_index_by_id(mounts, count, mounts[i].parent_id) < 0) {
+            print_mount_tree_node(mounts, count, (int)i, 0, visited);
+            printed = 1;
+        }
+    }
+
+    if (!printed && count > 0) {
+        print_mount_tree_node(mounts, count, 0, 0, visited);
+    }
+
+    for (i = 0; i < count; i++) {
+        if (!visited[i]) {
+            print_mount_tree_node(mounts, count, (int)i, 0, visited);
+        }
+    }
+
+    free(mounts);
+    free(visited);
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     int i;
@@ -508,6 +648,8 @@ int main(int argc, char **argv)
     const char *inode_path;
     const char *scan_path;
     const char *check_path;
+    const char *show_mount_path;
+    int mount_tree;
     int max_depth;
     unsigned long small_file_size;
     display_options display;
@@ -521,6 +663,8 @@ int main(int argc, char **argv)
     inode_path = NULL;
     scan_path = NULL;
     check_path = NULL;
+    show_mount_path = NULL;
+    mount_tree = 0;
     max_depth = -1;
     small_file_size = DEFAULT_SMALL_FILE_SIZE;
     display.mode = DISPLAY_BLOCKS;
@@ -551,6 +695,14 @@ int main(int argc, char **argv)
                 return BBFSCHECK_EXIT_INVALID_ARGUMENT;
             }
             check_path = argv[i];
+        } else if (strcmp(argv[i], "--show-mount") == 0) {
+            if (++i >= argc) {
+                diag_print_error("bbfscheck", "missing path for --show-mount", NULL);
+                return BBFSCHECK_EXIT_INVALID_ARGUMENT;
+            }
+            show_mount_path = argv[i];
+        } else if (strcmp(argv[i], "--mount-tree") == 0) {
+            mount_tree = 1;
         } else if (strcmp(argv[i], "--max-depth") == 0) {
             long parsed;
 
@@ -587,10 +739,11 @@ int main(int argc, char **argv)
     }
 
     mode_count = (summary_path != NULL) + (inode_path != NULL) + 
-                 (scan_path != NULL) + (check_path != NULL);
+                 (scan_path != NULL) + (check_path != NULL) +
+                 (show_mount_path != NULL) + mount_tree;
     if (mode_count != 1) {
         diag_print_error("bbfscheck", "choose exactly one mode",
-                         "--summary, --inode, --scan, or --check");
+                         "--summary, --inode, --scan, --check, --show-mount, or --mount-tree");
         return BBFSCHECK_EXIT_INVALID_ARGUMENT;
     }
 
@@ -606,5 +759,13 @@ int main(int argc, char **argv)
         return print_scan(scan_path, max_depth, small_file_size, &display);
     }
 
-    return print_check(check_path, max_depth, small_file_size, &display);
+    if (check_path != NULL) {
+        return print_check(check_path, max_depth, small_file_size, &display);
+    }
+
+    if (show_mount_path != NULL) {
+        return print_show_mount(show_mount_path);
+    }
+
+    return print_mount_tree();
 }

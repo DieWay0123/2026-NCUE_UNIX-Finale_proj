@@ -7,6 +7,10 @@
 #define DIAG_ADDR_LEN 64
 #define DIAG_STATE_LEN 32
 #define DIAG_PATH_LEN 256
+#define DIAG_PATH_MAX 4096
+#define DIAG_FIELD_MAX 256
+#define DIAG_OPTIONS_MAX 512
+
 
 typedef struct {
     int pid;
@@ -42,6 +46,18 @@ typedef struct {
 } diag_fs_scan_info;
 
 typedef struct {
+    int mount_id;
+    int parent_id;
+    char root[DIAG_PATH_MAX];
+    char mount_point[DIAG_PATH_MAX];
+    char source[DIAG_FIELD_MAX];
+    char fs_type[DIAG_FIELD_MAX];
+    char options[DIAG_OPTIONS_MAX];
+    char super_options[DIAG_OPTIONS_MAX];
+    int read_only;
+} diag_mount_info;
+
+typedef struct {
     char local_addr[DIAG_ADDR_LEN];
     int local_port;
     char remote_addr[DIAG_ADDR_LEN];
@@ -52,6 +68,11 @@ typedef struct {
 int diag_fs_get_info(const char *path, diag_fs_info *info);
 int diag_fs_scan_path(const char *path, int max_depth, unsigned long small_file_size,
                       diag_fs_scan_info *info);
+int diag_fs_get_mount_info(const char *path, diag_mount_info *info);
+int diag_fs_read_mounts(diag_mount_info *mounts,
+                        size_t capacity,
+                        size_t *count);
+
 void diag_print_error(const char *tool, const char *message, const char *detail);
 const char *diag_health_status(double warning_threshold, double critical_threshold, double value);
 
