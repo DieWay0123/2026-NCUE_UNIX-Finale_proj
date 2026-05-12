@@ -189,6 +189,8 @@ static int parse_mountinfo_line(char *line, diag_mount_info *info)
     char *fs_type;
     char *source;
     char *super_options;
+    char fallback_source[] = "none";
+    char fallback_super_options[] = "";
     size_t field;
 
     memset(info, 0, sizeof(*info));
@@ -235,10 +237,10 @@ static int parse_mountinfo_line(char *line, diag_mount_info *info)
     }
 
     if (source == NULL) {
-        source = "none";
+        source = fallback_source;
     }
     if (super_options == NULL) {
-        super_options = "";
+        super_options = fallback_super_options;
     }
 
     decode_mountinfo_field(root);
